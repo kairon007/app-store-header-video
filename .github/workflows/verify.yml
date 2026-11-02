@@ -1,0 +1,48 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check the scripts parse
+        run: node --check scripts/conform-video.mjs && node --check scripts/verify-video.mjs
+
+      - name: Check ffprobe is available
+        run: ffprobe -version | head -1
+
+      - name: Verify a known-good loop passes every check
+        run: |
+          ffmpeg -v error -y -f lavfi -i "color=c=0x1B2A41:s=3840x1646:r=30:d=8" \
+            -pix_fmt yuv420p /tmp/loop.mp4
+          node scripts/verify-video.mjs /tmp/loop.mp4 --placement header
+
+      - name: Verify a clip with a hard cut fails
+        run: |
+          ffmpeg -v error -y -f lavfi -i "color=c=red:s=960x412:r=30:d=4" -pix_fmt yuv420p /tmp/red.mp4
+          ffmpeg -v error -y -f lavfi -i "color=c=blue:s=960x412:r=30:d=4" -pix_fmt yuv420p /tmp/blue.mp4
+          printf "file /tmp/red.mp4\nfile /tmp/blue.mp4\n" > /tmp/list.txt
+          ffmpeg -v error -y -f concat -safe 0 -i /tmp/list.txt -c copy /tmp/cut.mp4
+          if node scripts/verify-video.mjs /tmp/cut.mp4 --placement header; then
+            echo "::error::a clip with a hard cut was accepted"
+            exit 1
+          fi
+          echo "the hard cut was correctly rejected"
+
+      - name: Conform a clip and check it
+        run: |
+          ffmpeg -v error -y -f lavfi -i "testsrc2=size=1920x823:rate=25:duration=8" \
+            -pix_fmt yuv420p /tmp/src.mp4
+          node scripts/conform-video.mjs --in /tmp/src.mp4 --out /tmp/header.mp4 --placement header
+          node scripts/verify-video.mjs /tmp/header.mp4 --placement header
